@@ -1,0 +1,239 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<con:soapui-project activeEnvironment="Default" name="AutomatedTesting" resourceRoot="" soapui-version="4.5.2" abortOnError="false" runType="SEQUENTIAL" xmlns:con="http://eviware.com/soapui/config"><con:settings/><con:testSuite name="SampleBinding TestSuite"><con:settings/><con:runType>SEQUENTIAL</con:runType><con:testCase failOnError="true" failTestCaseOnErrors="true" keepSession="false" maxResults="0" name="SampleOperation TestCase" searchProperties="true"><con:settings/><con:testStep type="groovy" name="Groovy Script_Run&amp;LogBugs"><con:settings/><con:config><script>import org.custommonkey.xmlunit.Difference;
+import com.autotest.lib.bug.*;
+
+
+//def project = testRunner.testCase.testSuite.project;
+def project = context.testCase.testSuite.project;
+      
+//General gen = new General(log);
+try{     
+	boolean propertiesLoaded = General.setProperties(log);
+	log.info("propertiesLoaded: " + propertiesLoaded);
+}  
+catch(Exception e){
+	if(e.message.contains("AutoTesting.properties (The system cannot find the file specified)")) {
+		log.error("Properties file not Found! Please keep the AutoTesting.properties file in the 'bin' folder of your SoapUI Installation Directory");
+	}
+	else if(e.message.contains("Path of root folder in Properties file does not exist")){
+		log.error("Properties file validation exception:: " + e.message);
+		log.info("TIP: Make sure you use forward-slashes in the path.");   
+	} 
+	else{
+		log.error("Properties file validation exception:: " + e.message);
+	}
+	return;
+}
+  
+String Mode = General.Mode; String EndPoint = General.EndPoint; String rootProjectFolder = General.RootProjectFolder; String ReqABMFolder = General.ReqABMFolder; String ExpectedProvABMFolder = General.ExpectedProvABMFolder; 
+String ProvRespABMFolder = General.ProvRespABMFolder; String ExpectedRespABMFolder = General.ExpectedRespABMFolder;
+String BugzillaUsername = General.BugzillaUsername; String BugzillaPassword = General.BugzillaPassword; String WiproEmail = General.WiproEmail; String BugzillaURL = General.BugzillaURL;
+
+String tempString = rootProjectFolder.substring(0,(rootProjectFolder.length())-1);
+String ServiceName = tempString.substring(tempString.lastIndexOf("/")+1);
+tempString = tempString.substring(0, (tempString.lastIndexOf("/")) );
+String Opco = tempString.substring(tempString.lastIndexOf("/")+1);
+        
+log.info("ServiceName= " + ServiceName);
+log.info("OPCO Name= " + Opco);
+log.info("MODE= " + Mode);
+
+File reqABM_Folder = new File(rootProjectFolder+ReqABMFolder);
+
+String testSuiteName="SampleBinding TestSuite";
+String testCaseName="HttpRequest TestCase";		//"SampleOperation TestCase";
+String reqTestStepName="SampleOperation";
+ 
+
+
+try{
+	project.getMockServiceByName("Sample MockService").start();		// Start the mock service
+}
+catch(Exception e){
+	log.info("Error in Starting Mock-Service--> " + e.message);
+	log.info("TIP: Try giving a different port number to the mock-service");
+	return;
+}
+ 
+try{
+	/*def environmentProperties = new java.util.Properties()
+	def testProperties = new java.util.Properties()
+	def groovyUtils = new com.eviware.soapui.support.GroovyUtils( context ) */
+
+	def testCases = context.testCase.testSuite.getTestCaseList() 
+	def testCaseC = testRunner.testCase.testSuite.project.testSuites[testSuiteName].getTestCaseByName(testCaseName);
+
+	File[] directoryListing = reqABM_Folder.listFiles();
+ 	if (directoryListing != null) {
+		def StepCount=0;
+	  	for (File xmlfile : directoryListing) {
+			String xmlfileName=xmlfile.getName();
+	  		General.setMockProperties(xmlfileName,"True");
+	  		  
+	  		def testCasePointer = project.testSuites[testSuiteName].testCases[testCaseName];
+               def step = testCaseC.getTestStepAt(StepCount)	// get the label or names of individual testSTEP
+               testSTEPLabel = step.getLabel()
+
+               // Fire the request and get the result
+               def testStep = testRunner.testCase.testSteps[testSTEPLabel];
+			String reqFromFile = xmlfile.text;
+               def testStepPointer = project.testSuites[testSuiteName].testCases[testCaseName].testSteps[reqTestStepName];
+               testStepPointer.setPropertyValue("Request",reqFromFile);
+               testStepPointer.setPropertyValue("Endpoint",EndPoint);
+               result = testStepPointer.run( testRunner, context )
+               log.info("--------- Request fired: "+xmlfileName + " ---------------");
+               // get the status form the result
+               def status = result.getStatus()
+               //log.info "STATUS : " + status
+			          
+			String expectedResponseFile=rootProjectFolder+ExpectedRespABMFolder+xmlfileName;
+			String expectedResponse = new File(expectedResponseFile).text;
+			//log.info("ExpectedResponse:"+ expectedResponse);
+			
+			def responseXML = testStepPointer.getProperty("Response").getValue();
+			if(responseXML==null) {
+				log.error("No response received for " + xmlfileName);
+				log.info("TIP: Check the endpoint URL;  Try RESTARTING the MOCK service;  Try hitting the endpoint from a separate HTTP Request Step");
+				break;
+			} 
+			//log.info "Response= "+responseXML;
+			def resXML = responseXML.bytes.encodeBase64();         
+                                              
+			/* ******************Difference******************* */    
+ 
+			List&lt;Difference> differences=new ArrayList&lt;Difference>(); 
+        		Comparison com = new Comparison(log);
+        		//String bugSummary="incorrect RespABM: "+expectedResponseFile;         		
+        		      
+        		String bugSummary="incorrect RespABM: " + (ServiceName + "/" + xmlfileName);        		
+			boolean res=com.compare(expectedResponse,responseXML,reqFromFile,differences,bugSummary,ServiceName,Opco,BugzillaUsername,BugzillaPassword,WiproEmail,BugzillaURL); 
+			//log.info("similar: "+res);  
+			if(res){
+				log.info("Congrats! Response ABM for filename "+ xmlfileName + " is correct.");
+			}
+			else{
+				log.info("OOPS! Response ABM for filename "+ xmlfileName + " is incorrect. The differences have been logged in Bugzilla.");
+				log.info("Expected-ResponseABM:: " + expectedResponse);
+				log.info("Actual-ResponseABM:: " + responseXML);
+			}
+		 
+			for (Difference difference : differences) {
+            		//Difference difference = (Difference)object; 
+           
+            		Boolean similar=difference.isRecoverable();
+                 
+            		if(!similar)		// Print the difference in log
+            		{
+	            		//log.info("***********************");
+            			log.info(difference);
+            		}
+        		}
+        		log.info("--------------- File "+ xmlfileName +" Processed --------------");
+ 		}     
+ 	}
+
+ 	else {
+ 		log.error("ERROR:: Given path is not a directory's path!     TIP: Make sure you use forward-slashes in the path.");
+ 	}
+}   
+                
+catch(Exception e) {
+	log.error("Exception occurred in Request-Groovy: "+e.getClass().getName()+" : "+e.message);	
+}  
+          
+//project.getMockServiceByName("Sample MockService").getMockRunner().stop();		// Stop the mock Service</script></con:config></con:testStep><con:properties/><con:reportParameters/></con:testCase><con:testCase failOnError="true" failTestCaseOnErrors="true" keepSession="false" maxResults="0" name="HttpRequest TestCase" searchProperties="true"><con:settings/><con:testStep type="httprequest" name="SampleOperation"><con:settings/><con:config method="POST" xsi:type="con:HttpRequest" name="SampleOperation" postQueryString="false" mediaType="text/xml" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.WsdlRequest@request-headers">&lt;xml-fragment/></con:setting></con:settings><con:endpoint>http://10.141.116.102:8011/UpdatePrepaidAccount/Proxy_Services/ProcessCustomerPartyLCMSReqABCSPS?WSDL</con:endpoint><con:request><![CDATA[<SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:SOAP-ENC="http://schemas.xmlsoap.org/soap/encoding/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:m0="http://xmlns.ws.com/xsd/Common"><SOAP-ENV:Header xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"><wsse:Security><wsse:UsernameToken><wsse:Username>LOYALTY</wsse:Username> <wsse:Password>LOYALTY</wsse:Password> </wsse:UsernameToken></wsse:Security></SOAP-ENV:Header><SOAP-ENV:Body><m:UpdatePrepaidAccountRequest xmlns:m="http://xmlns.ws.com/xsd/UpdatePrepaidAccount"><m:CommonComponents><m0:MSISDNNum>965014180</m0:MSISDNNum> <m0:ProcessingNumber>4000211</m0:ProcessingNumber><m0:OpCoID>ZM</m0:OpCoID><m0:SenderID>LCMS</m0:SenderID></m:CommonComponents><m:Narration>AdjustAccount</m:Narration><m:Identification><m:IdType>ServiceID</m:IdType><m:IdValue>965014180</m:IdValue></m:Identification><m:AdjustmentDetails><m:AccountDetails><m:TypeCode>2526</m:TypeCode> <m:Amount>0.0</m:Amount><m:GLId>0</m:GLId><m:MinMeasureId/><m:ProductId>3000431</m:ProductId><m:ExpiryTime>2014-12-31T17:57:35Z</m:ExpiryTime></m:AccountDetails><m:SPCode>SP001</m:SPCode><m:Note>Adjusting Account</m:Note><m:ValidityIncrement>0</m:ValidityIncrement></m:AdjustmentDetails></m:UpdatePrepaidAccountRequest></SOAP-ENV:Body></SOAP-ENV:Envelope>]]></con:request><con:credentials><con:authType>Global HTTP Settings</con:authType></con:credentials><con:jmsConfig JMSDeliveryMode="PERSISTENT"/><con:jmsPropertyConfig/><con:parameters/></con:config></con:testStep><con:properties/><con:reportParameters/></con:testCase><con:properties/><con:reportParameters/></con:testSuite><con:mockService port="3003" path="/soapuiMock" host="localhost" name="Sample MockService" bindToHostOnly="false" docroot=""><con:settings><con:setting id="com.eviware.soapui.impl.wsdl.mock.WsdlMockService@require-soap-action">false</con:setting></con:settings><con:properties/><con:onRequestScript>import org.custommonkey.xmlunit.Difference;
+import com.autotest.lib.bug.*;
+
+def project = mockRunner.getMockService().getProject();
+   
+//General gen = General.generalObject;    
+//General gen = new General(log);
+try{
+	boolean checkFlagAndDefaultResponse = General.checkFlagAndDefaultResponse();	// Check whether the request has come from Groovy
+}  
+catch(Exception e){
+	if(e.message.contains("AutoTesting.properties (The system cannot find the file specified)")) {
+		log.error("Properties file not Found! Please keep the AutoTesting.properties file in the 'bin' folder of your SoapUI Installation Directory");
+	}
+	else if(e.message.contains("Path of root folder in Properties file does not exist")){
+		log.error("Properties file validation exception:: " + e.message);
+		log.info("TIP: Make sure you use forward-slashes in the path.");   
+	}
+	else{
+		log.error("Properties file validation exception:: " + e.message);
+	}
+	throw new Exception("Exception occurred in Mock-Service: " + e.message);
+	//return;
+}
+  
+String Mode = General.Mode; String EndPoint = General.EndPoint; String rootProjectFolder = General.RootProjectFolder; String ReqABMFolder = General.ReqABMFolder; String ExpectedProvABMFolder = General.ExpectedProvABMFolder; 
+String ProvRespABMFolder = General.ProvRespABMFolder; String ExpectedRespABMFolder = General.ExpectedRespABMFolder;
+String BugzillaUsername = General.BugzillaUsername; String BugzillaPassword = General.BugzillaPassword; String WiproEmail = General.WiproEmail; String BugzillaURL = General.BugzillaURL;
+String FlagSentFromGroovy = General.FlagSentFromGroovy;
+
+String tempString = rootProjectFolder.substring(0,(rootProjectFolder.length())-1);
+String ServiceName = tempString.substring(tempString.lastIndexOf("/")+1);
+tempString = tempString.substring(0, (tempString.lastIndexOf("/")) );
+String Opco = tempString.substring(tempString.lastIndexOf("/")+1);
+
+if((!FlagSentFromGroovy.equals("True")) || (Mode.equals("SendDefaultResponse"))){
+		mockRunner.returnFile(mockRequest.httpResponse, new File(rootProjectFolder+ProvRespABMFolder+"DefaultResponse.xml"));
+		log.info("DefaultResponse.xml sent from Mock-Service");
+		return new com.eviware.soapui.impl.wsdl.mock.WsdlMockResult(mockRequest);
+}
+
+try{
+	String xmlfileName = General.xmlfileName;
+
+	log.info("Provider Request ABM received by Mock-Service: "+xmlfileName);
+ 
+	def req = mockRequest
+	def actualProvABM = req.getRequestContent()
+	//log.info("Request Received: "+ actualProvABM);
+
+	String expectedProvABM = new File(rootProjectFolder+ExpectedProvABMFolder+xmlfileName).text;
+	//log.info('Expected ProvABM: '+expectedProvABM);
+	String requestXML = new File(rootProjectFolder+ReqABMFolder+xmlfileName).text;		//get the Request XML to attach in bugzilla
+
+	// ******************Difference********************     
+
+ 
+	List&lt;Difference> differences=new ArrayList&lt;Difference>(); 
+     Comparison com = new Comparison(log);
+     //String bugSummary="incorrectProvABM: "+rootProjectFolder+ExpectedProvABMFolder+xmlfileName;
+     String tempBugSummary = rootProjectFolder.substring(0,(rootProjectFolder.length())-1);
+     String bugSummary="incorrect RespABM: " + (tempBugSummary.substring(tempBugSummary.lastIndexOf("/")+1) + "/" + xmlfileName);    
+	boolean res=com.compare(expectedProvABM,actualProvABM,requestXML,differences,bugSummary,ServiceName,Opco,BugzillaUsername,BugzillaPassword,WiproEmail,BugzillaURL); 
+	//log.info("similar: "+res);  
+	if(res){
+		log.info("Congrats! Provider Request ABM for filename "+ xmlfileName + " is correct.");
+	}
+	else{
+		log.info("OOPS! Provider Request ABM for filename "+ xmlfileName + " is incorrect. The differences have been logged in Bugzilla.");
+		log.info("Expected-ProviderRequestABM:: " + expectedProvABM);
+		log.info("Actual-ProviderRequestABM:: " + actualProvABM);
+	}
+		         
+	for (Difference difference : differences) {
+     	Boolean similar=difference.isRecoverable();
+            
+     	if(!similar)		// Print the differences in log
+     	{
+     		//log.info("***********************");
+          	log.info(difference);
+     	}
+	}
+ 
+	General.setMockProperties("","False");
+	
+	// Send back the Provider response ABM
+	mockRunner.returnFile(mockRequest.httpResponse, new File(rootProjectFolder+ProvRespABMFolder+xmlfileName));
+	log.info("...... Provider Response ABM sent by Mock-Service for file "+ xmlfileName +" ......");
+	return new com.eviware.soapui.impl.wsdl.mock.WsdlMockResult(mockRequest)
+}               
+catch(Exception e){
+	log.error("Exception occurred in Mock-Service: "+e.getClass().getName()+" : "+e.message);
+	General.setMockProperties("","False");
+	throw new Exception("Exception occurred in Mock-Service: " + e.message);
+}
+            </con:onRequestScript></con:mockService><con:properties/><con:wssContainer/><con:databaseConnectionContainer/><con:reporting><con:reportTemplates/><con:xmlTemplates/><con:parameters/></con:reporting></con:soapui-project>
